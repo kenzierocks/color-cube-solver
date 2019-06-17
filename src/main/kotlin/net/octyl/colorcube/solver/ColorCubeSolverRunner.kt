@@ -54,7 +54,17 @@ object ColorCubeSolverRunner {
         .ofType(Int::class.java)
         .defaultsTo(3)
 
-    private val appScope = CoroutineScope(Dispatchers.Unconfined + CoroutineName("Application"))
+    private val SCRAMBLE_TIMES = PARSER.acceptsAll(listOf("scramble-times"), "Number of times to rotate when scrambling")
+        .withRequiredArg()
+        .ofType(Int::class.java)
+        .defaultsTo(500)
+
+    private val MOVE_SPEED = PARSER.acceptsAll(listOf("m", "move-speed"), "How many frames it should take to perform one move")
+        .withRequiredArg()
+        .ofType(Int::class.java)
+        .defaultsTo(2)
+
+    private val appScope = CoroutineScope(Dispatchers.Default + CoroutineName("Application"))
 
     @JvmStatic
     fun main(args: Array<String>) {
@@ -73,16 +83,7 @@ object ColorCubeSolverRunner {
         }
 
         val waitForClick = opts.has(WAIT_FOR_CLICK)
-        val size = opts.valueOf(SIZE)
-        if (size < 3) {
-            System.err.println("Size must be greater than or equal to 3.")
-            exitProcess(1)
-        }
-        if (size % 2 == 0) {
-            System.err.println("Size must be odd.")
-            exitProcess(1)
-        }
-        val cube = ColorCube(CCArray(size, SixColor.COLOR_1).apply {
+        val cube = ColorCube(CCArray(opts.size(), SixColor.COLOR_1).apply {
             for (face in Face.values()) {
                 val color = SixColor.values()[face.ordinal]
                 for ((i, j) in facePoints) {
@@ -91,7 +92,6 @@ object ColorCubeSolverRunner {
             }
         })
         val msgChannel = Channel<SolverMessage>(5)
-        val movesBufferChannel = Channel<CubeMove>(100)
         val movesChannel = Channel<CubeMove>(100)
         val clicksChannel = Channel<Unit>(UNLIMITED)
 
@@ -99,39 +99,72 @@ object ColorCubeSolverRunner {
             if (waitForClick) {
                 clicksChannel.receive()
             }
-            val startingCube = scramble(cube, movesChannel)
-            val solver = ColorCubeSolver(startingCube, msgChannel, movesBufferChannel)
+            val startingCube = scramble(cube, opts.scrambleTimes(), movesChannel)
+            if (waitForClick) {
+                clicksChannel.receive()
+                launchClickDiscarder(clicksChannel)
+            }
+            val solver = ColorCubeSolver(startingCube, msgChannel, movesChannel)
 
             solver.start()
         }
-        appScope.launch {
-            while (true) {
-                val next = movesBufferChannel.receive()
-                if (waitForClick) {
-                    clicksChannel.receive()
-                }
-                movesChannel.send(next)
-            }
-        }
         if (!waitForClick) {
-            // discard clicks
-            appScope.launch { while (true) clicksChannel.receive() }
+            launchClickDiscarder(clicksChannel)
         }
 
-        val display = Display(cube, movesChannel, clicksChannel)
+        val display = Display(cube, opts.moveSpeed(), movesChannel, clicksChannel)
         display.run()
+    }
+
+    private inline fun checkUser(condition: Boolean, message: () -> String) {
+        if (!condition) {
+            System.err.println(message())
+            exitProcess(1)
+        }
+    }
+
+    private fun OptionSet.size(): Int {
+        val size = valueOf(SIZE)
+        checkUser(size >= 3) { "Size must be greater than or equal to 3." }
+        checkUser(size % 2 == 1) { "Size must be odd." }
+        return size
+    }
+
+    private fun OptionSet.scrambleTimes(): Int {
+        val scrambleTimes = valueOf(SCRAMBLE_TIMES)
+        checkUser(scrambleTimes >= 0) { "Scramble times must be greater than or equal to 0." }
+        return scrambleTimes
+    }
+
+    private fun OptionSet.moveSpeed(): Int {
+        val moveSpeed = valueOf(MOVE_SPEED)
+        checkUser(moveSpeed > 0) { "Move speed must be greater than 0." }
+        return moveSpeed
+    }
+
+    private fun launchClickDiscarder(clicksChannel: Channel<Unit>) {
+        appScope.launch { while (true) clicksChannel.receive() }
     }
 
     private suspend fun scramble(
         initialCube: SixCube,
+        rotations: Int,
         movesChannel: Channel<CubeMove>,
         rng: Random = Random(Timer.getInstance().getValue(TimeUnit.MILLISECONDS))
     ): SixCube {
-        val rotations = rng.nextInt(500, 1000)
         var cube = initialCube
+        var lastFace: Face? = null
+        var lastDirection: RotationDirection? = null
         for (x in (0 until rotations)) {
-            val face = Face.values().random(rng)
-            val direction = RotationDirection.values().random(rng)
+            var face: Face
+            var direction: RotationDirection
+            do {
+                face = Face.values().random(rng)
+                direction = RotationDirection.values().random(rng)
+            } while (face == lastFace && direction == lastDirection?.opposite)
+            lastFace = face
+            lastDirection = direction
+
             movesChannel.send(Rotate(face, direction))
             cube = cube.rotate(face, direction)
         }

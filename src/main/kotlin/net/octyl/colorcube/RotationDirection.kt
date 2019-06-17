@@ -27,5 +27,11 @@ package net.octyl.colorcube
 
 enum class RotationDirection {
     CLOCKWISE,
-    COUNTER_CLOCKWISE
+    COUNTER_CLOCKWISE;
+
+    val opposite: RotationDirection
+        get() = when (this) {
+            CLOCKWISE -> COUNTER_CLOCKWISE
+            COUNTER_CLOCKWISE -> CLOCKWISE
+        }
 }

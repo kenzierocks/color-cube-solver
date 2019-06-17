@@ -46,9 +46,11 @@ import net.octyl.colorcube.gl.SixCubeRenderer
 import org.lwjgl.glfw.GLFW.glfwSetWindowRefreshCallback
 import java.lang.Math.toRadians
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
 
 class Display(
     initialCube: SixCube,
+    moveSpeed: Int,
     private val moves: ReceiveChannel<CubeMove>,
     private val clicksChannel: SendChannel<Unit>
 ) {
@@ -61,6 +63,7 @@ class Display(
     private var currentCube: SixCube = initialCube
     private var currentlyDrawingMove: CubeMove? = null
     private var currentMoveProgress: Double = 0.0
+    private val moveProgressDelta = 6 / moveSpeed.toDouble()
     private var needsRedraw = true
     private val camera = CenterStaringCamera(distanceAway = 50.0)
     private lateinit var cubeRenderer: SixCubeRenderer
@@ -84,13 +87,13 @@ class Display(
             window.eventBus.post(WindowFramebufferResizeEvent.create(window, size.x, size.y))
             glfwSetWindowRefreshCallback(window.windowPointer) { needsRedraw = true }
             val timer = Timer.getInstance()
-            var frameDeltaTracker = timer.getValue(TimeUnit.MILLISECONDS)
+            var frameDeltaTracker = timer.getValue(TimeUnit.NANOSECONDS)
 
             while (!window.isCloseRequested) {
                 sync.sync(60)
 
-                val frameStartTime = timer.getValue(TimeUnit.MILLISECONDS)
-                val delta = (frameStartTime - frameDeltaTracker)
+                val frameStartTime = timer.getValue(TimeUnit.NANOSECONDS)
+                val delta = (frameStartTime - frameDeltaTracker) / 1000000.toDouble()
                 frameDeltaTracker = frameStartTime
 
                 checkMoveForDraw(delta)
@@ -111,7 +114,7 @@ class Display(
         }
     }
 
-    private fun checkMoveForDraw(delta: Long) {
+    private fun checkMoveForDraw(delta: Double) {
         if (currentMoveProgress >= 100) {
             currentCube = currentlyDrawingMove!!.apply(currentCube)
             currentlyDrawingMove = null
@@ -124,7 +127,10 @@ class Display(
                 currentlyDrawingMove = move
             }
         } else {
-            currentMoveProgress += delta * 1
+            currentMoveProgress = min(
+                currentMoveProgress + delta * moveProgressDelta,
+                100.0
+            )
             needsRedraw = true
         }
     }
@@ -162,7 +168,7 @@ class Display(
         }
     }
 
-    private fun checkCameraKeys(delta: Long) {
+    private fun checkCameraKeys(delta: Double) {
         val keyboard = window.keyboard
         val change = 0.001 * delta
 
